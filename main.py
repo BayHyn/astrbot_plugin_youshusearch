@@ -69,14 +69,6 @@ class YoushuSearchPlugin(Star):
             logger.error(f"❌ 执行搜索API时发生未知错误: {e}")
             raise
 
-
-    async def _search_books_by_author(self, session: aiohttp.ClientSession, author_name: str) -> List[Dict]:
-        """通过作者名搜索所有书籍，返回书名列表（直接调用API）"""
-        results = await self._perform_search(session, author_name)
-        if results:
-            return [{'title': book.get('novel_name')} for book in results]
-        return []
-
     async def _get_latest_novel_id(self, session: aiohttp.ClientSession) -> Optional[int]:
         """获取优书网最新的小说ID"""
         url = "https://www.ypshuo.com/"
@@ -104,16 +96,35 @@ class YoushuSearchPlugin(Star):
     async def _get_novel_details_from_html(self, html_content: str, novel_id: str) -> Dict:
         """
         从HTML响应中提取小说详细信息的辅助函数，使用更健壮的DOM解析。
+        已修复封面图片获取逻辑。
         """
         novel_info = {}
 
         try:
-            # 提取封面图片URL，并安全处理
-            image_match = re.search(r'<img src="(.*?)"[^>]*?class="book-img"', html_content)
-            image_url = image_match.group(1) if image_match else None
-            logger.info(f"提取到的原始封面URL: {image_url}")
-            
-            novel_info['image_url'] = image_url
+            # 1. 优先从OGP元标签中提取封面图片URL
+            og_image_match = re.search(r'<meta[^>]*?name="og:image"[^>]*?content="(.*?)"', html_content)
+            if og_image_match:
+                image_url = og_image_match.group(1)
+                # 确保URL是完整的
+                if image_url.startswith('//'):
+                    image_url = 'https:' + image_url
+                elif image_url.startswith('/'):
+                    image_url = urljoin(self.base_api_url, image_url)
+                novel_info['image_url'] = image_url
+                logger.info(f"提取到的封面URL (从OGP标签): {image_url}")
+            else:
+                # 2. 如果OGP标签不存在，再回退到原来的正则匹配方法
+                image_match = re.search(r'<img src="(.*?)"[^>]*?class="book-img"', html_content)
+                if image_match:
+                    image_url = image_match.group(1)
+                    if image_url.startswith('/'):
+                        image_url = urljoin(self.base_api_url, image_url)
+                    novel_info['image_url'] = image_url
+                    logger.info(f"提取到的封面URL (从<img>标签): {image_url}")
+                else:
+                    novel_info['image_url'] = None
+                    logger.warning("未能从页面中提取到封面图片URL。")
+
 
             # 提取书名
             name_match = re.search(r'<h1 class="book-name".*?>(.*?)</h1>', html_content, re.DOTALL)
@@ -127,7 +138,6 @@ class YoushuSearchPlugin(Star):
             word_count_match = re.search(r'字数：(.*?)万字', html_content)
             if word_count_match:
                 try:
-                    # 去除千位分隔符
                     word_str = word_count_match.group(1).strip().replace(',', '')
                     novel_info['word_number'] = float(word_str) * 10000
                 except (ValueError, TypeError):
@@ -148,24 +158,21 @@ class YoushuSearchPlugin(Star):
                     novel_info['scorer'] = value.strip()
             
             # 提取状态
-            status_match = re.search(r'<div class="book-status"[^>]*?>\s*状态：\s*(.*?)\s*<', html_content)
+            status_match = re.search(r'状态：\s*(.*?)\s*<', html_content)
             novel_info['status'] = status_match.group(1).strip() if status_match else '无'
 
             # 提取更新时间
-            update_time_match = re.search(r'<div class="update-time"[^>]*?>\s*更新时间：\s*(.*?)\s*</div>', html_content)
+            update_time_match = re.search(r'更新时间：\s*(.*?)\s*</div>', html_content)
             novel_info['update_time_str'] = update_time_match.group(1).strip() if update_time_match else '无'
             
             reviews = []
-            review_item_regex = re.compile(r'<div class="item"[^>]*?>.*?<div class="discuss-content"[^>]*?>.*?<div class="content-inner"[^>]*?>(.*?)</div>.*?</div>.*?<div class="novel-rate"[^>]*?><div role="slider" aria-valuenow="([^"]+)"', re.DOTALL)
+            review_item_regex = re.compile(r'<div class="item"[^>]*?>.*?<div class="discuss-content"[^>]*?>.*?<span class="content-inner-details"[^>]*?>(.*?)</span>.*?</div>.*?</div>.*?<div class="novel-rate"[^>]*?><div role="slider" aria-valuenow="([^"]+)"', re.DOTALL)
             all_reviews = review_item_regex.findall(html_content)
             
             for review_data in all_reviews[:3]: 
                 content_block, rating = review_data
                 
-                content_match = re.search(r'<span class="content-inner-details"[^>]*?>(.*?)</span>', content_block, re.DOTALL)
-                content = content_match.group(1).strip() if content_match else '无'
-                
-                content = re.sub(r'<[^>]+>', '', content)
+                content = re.sub(r'<[^>]+>', '', content_block)
                 content = re.sub(r'[\r\n\t]+', '', content).strip()
                 
                 if content:
