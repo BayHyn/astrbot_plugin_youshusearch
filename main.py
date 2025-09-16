@@ -108,10 +108,12 @@ class YoushuSearchPlugin(Star):
         novel_info = {}
 
         try:
-            # 提取封面图片URL
+            # 提取封面图片URL，并安全处理
             image_match = re.search(r'<img src="(.*?)"[^>]*?class="book-img"', html_content)
-            # 这里直接使用提取到的完整URL，不再进行拼接
-            novel_info['image_url'] = image_match.group(1) if image_match else None
+            image_url = image_match.group(1) if image_match else None
+            logger.info(f"提取到的原始封面URL: {image_url}")
+            
+            novel_info['image_url'] = image_url
 
             # 提取书名
             name_match = re.search(r'<h1 class="book-name".*?>(.*?)</h1>', html_content, re.DOTALL)
