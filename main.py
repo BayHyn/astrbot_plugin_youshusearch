@@ -16,7 +16,7 @@ from astrbot.api import logger
     "astrbot_plugin_youshusearch",  # 插件ID
     "Foolllll",                    # 作者名
     "优书搜索插件",                  # 插件显示名称
-    "1.0",                         # 版本号
+    "1.1",                         # 版本号
     "https://github.com/Foolllll-J/astrbot_plugin_youshusearch", # 插件仓库地址
 )
 class YoushuSearchPlugin(Star):
@@ -209,8 +209,6 @@ class YoushuSearchPlugin(Star):
             yield event.plain_result("❌ 请提供书名进行搜索。")
             return
 
-        yield event.plain_result(f"📚 正在搜索书籍: 【{book_name}】，请稍候...")
-
         try:
             async with aiohttp.ClientSession() as session:
                 search_results = await self._perform_search(session, book_name)
@@ -260,7 +258,7 @@ class YoushuSearchPlugin(Star):
 
                                     reviews = novel_info.get('reviews', [])
                                     if reviews:
-                                        message_text += "\n--- 📝 精选书评 ---\n"
+                                        message_text += "\n--- 📝 最新书评 ---\n"
                                         for i, review in enumerate(reviews):
                                             message_text += f"书评{i+1} ({review.get('rating', '无')}分): {review.get('content', '无')}\n"
                                     
@@ -340,7 +338,7 @@ class YoushuSearchPlugin(Star):
 
                 reviews = novel_info.get('reviews', [])
                 if reviews:
-                    message_text += "\n--- 📝 精选书评 ---\n"
+                    message_text += "\n--- 📝 最新书评 ---\n"
                     for i, review in enumerate(reviews):
                         message_text += f"书评{i+1} ({review.get('rating', '无')}分): {review.get('content', '无')}\n"
                 
@@ -361,7 +359,6 @@ class YoushuSearchPlugin(Star):
         随机获取一本优书网上的小说信息。
         用法: /随机小说
         """
-        yield event.plain_result("🎲 正在为你随机寻找一本有趣的小说，请稍候...")
         
         max_retries = 5
         for attempt in range(max_retries):
@@ -421,7 +418,7 @@ class YoushuSearchPlugin(Star):
 
                     reviews = novel_info.get('reviews', [])
                     if reviews:
-                        message_text += "\n--- 📝 精选书评 ---\n"
+                        message_text += "\n--- 📝 最新书评 ---\n"
                         for i, review in enumerate(reviews):
                             message_text += f"书评{i+1} ({review.get('rating', '无')}分): {review.get('content', '无')}\n"
                     
