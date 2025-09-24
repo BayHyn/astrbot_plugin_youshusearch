@@ -235,8 +235,8 @@ class YoushuSearchPlugin(Star):
                                 novel_info = await self._get_novel_details_from_html(html_content, str(novel_id))
                                 
                                 if novel_info and novel_info.get('novel_name'):
-                                    message_text = f"--- 📚 【{novel_info.get('novel_name', '无')}】详细信息 ---\n"
-                                    message_text += f"✍️ 作者: {novel_info.get('author_name', '无')}\n"
+                                    message_text = f"---【{novel_info.get('novel_name', '无')}】详细信息 ---\n"
+                                    message_text += f"作者: {novel_info.get('author_name', '无')}\n"
                                     
                                     word_number = novel_info.get('word_number')
                                     if word_number is not None and isinstance(word_number, (int, float)):
