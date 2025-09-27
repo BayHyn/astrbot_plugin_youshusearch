@@ -391,12 +391,12 @@ class YoushuSearchPlugin(Star):
                         continue
 
                     # 格式化并返回信息
-                    message_text = f"--- 🎲 【{novel_info.get('novel_name', '无')}】 (随机) ---\n"
+                    message_text = f"---【{novel_info.get('novel_name', '无')}】---\n"
                     
                     author_name = novel_info.get('author_name', '无')
                     if not author_name:
                         author_name = '无'
-                    message_text += f"✍️ 作者: {author_name}\n"
+                    message_text += f"作者: {author_name}\n"
                     
                     word_number = novel_info.get('word_number')
                     if word_number is not None and isinstance(word_number, (int, float)):
