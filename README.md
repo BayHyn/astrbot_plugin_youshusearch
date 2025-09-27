@@ -53,7 +53,7 @@
 
 ## 📞 联系方式
 
-GitHub Issues: [https://github.com/Foolllll-J/astrbot_plugin_youshu_search/issues](https://www.google.com/search?q=https://github.com/Foolllll-J/astrbot_plugin_youshu_search/issues)
+GitHub Issues: [https://github.com/Foolllll-J/astrbot_plugin_youshusearch/issues](https://www.google.com/search?q=https://github.com/Foolllll-J/astrbot_plugin_youshu_search/issues)
 
 
 # 支持
