@@ -4,6 +4,7 @@ import json
 import time
 import random
 import re
+import base64
 from typing import Dict, List, Optional
 from urllib.parse import urljoin, quote
 
@@ -76,7 +77,6 @@ class YoushuSearchPlugin(Star):
 
         elif self.api == 2:
             try:
-                results_per_page = 20
                 encoded_keyword = quote(keyword)
                 search_url = urljoin(self.base_api_url, f"/search/all/{encoded_keyword}/{page}.html")
                 logger.info(f"正在访问搜索URL: {search_url}")
@@ -84,34 +84,51 @@ class YoushuSearchPlugin(Star):
                 async with session.get(search_url, headers=self.headers, timeout=20) as response:
                     response.raise_for_status()
                     html_content = await response.text()
-                    
+                
+                def clean_html(raw_html):
+                    return re.sub(r'<[^>]+>', '', raw_html).strip()
+
+                if '共有<b class="hot">' in html_content:
+                    logger.info("检测到搜索结果列表页，按列表解析。")
                     total_results = 0
                     total_match = re.search(r'共有<b class="hot">\s*(\d+)\s*</b>条结果', html_content)
                     if total_match:
                         total_results = int(total_match.group(1))
+                    
+                    results_per_page = 20
                     total_pages = (total_results + results_per_page - 1) // results_per_page if total_results > 0 else 1
                     
-                    def clean_html(raw_html):
-                        return re.sub(r'<[^>]+>', '', raw_html).strip()
-
                     results = []
                     result_blocks = re.findall(r'<div class="c_row">.*?<div class="cb"></div>', html_content, re.DOTALL)
-
                     for block in result_blocks:
                         match = re.search(r'<span class="c_subject"><a href="/book/(\d+)">(.*?)</a></span>', block, re.DOTALL)
                         if match:
-                            book_id = match.group(1)
-                            novel_name_html = match.group(2)
-                            results.append({
-                                'id': int(book_id),
-                                'novel_name': clean_html(novel_name_html)
-                            })
+                            book_id, novel_name_html = match.group(1), match.group(2)
+                            results.append({'id': int(book_id), 'novel_name': clean_html(novel_name_html)})
                     
-                    logger.info(f"成功从 youshu.me (Page {page}) 解析到 {len(results)} 条结果，总计 {total_results} 条。")
+                    logger.info(f"成功从列表页解析到 {len(results)} 条结果，共 {total_pages} 页。")
                     return results, total_pages
+                else:
+                    logger.info("未找到搜索列表，尝试按单本书籍详情页解析...")
+                    name_match = re.search(r'<title>(.*?)-.*?-优书网</title>', html_content)
+                    id_match = re.search(r"uservote\.php\?id=(\d+)|rating\('\d+',\s*'(\d+)'\)|addbookcase\.php\?bid=(\d+)", html_content)
+
+                    if name_match and id_match:
+                        novel_id_str = next((gid for gid in id_match.groups() if gid is not None), None)
+                        if novel_id_str:
+                            novel_name = clean_html(name_match.group(1))
+                            novel_id = int(novel_id_str)
+                            logger.info(f"搜索结果为直接跳转，解析到书籍: '{novel_name}' (ID: {novel_id})")
+                            
+                            results = [{'id': novel_id, 'novel_name': novel_name}]
+                            total_pages = 1
+                            return results, total_pages
+
+                    logger.warning("页面既不是搜索列表也不是有效的书籍详情页，判定为无结果。")
+                    return [], 0
 
             except Exception as e:
-                logger.error(f"❌ 执行搜索时发生未知错误: {e}", exc_info=True)
+                logger.error(f"❌ 执行新网址搜索时发生未知错误: {e}", exc_info=True)
                 return None
 
     async def _get_latest_novel_id(self, session: aiohttp.ClientSession) -> Optional[int]:
@@ -369,15 +386,14 @@ class YoushuSearchPlugin(Star):
             
     async def _get_and_format_novel_details(self, event: AstrMessageEvent, session: aiohttp.ClientSession, novel_id: str):
         """
-        根据小说ID获取、解析并格式化书籍详情，并使用 event 对象创建可直接 yield 的消息结果。
+        根据小说ID获取、解析并格式化书籍详情。
         """
         if self.api == 1:
             novel_url = f"https://www.ypshuo.com/novel/{novel_id}.html"
-        else:  # self.api == 2
+        else:
             novel_url = f"https://youshu.me/book/{novel_id}"
 
         try:
-            # 获取并解析详情页
             async with session.get(novel_url, headers=self.headers, timeout=10) as response:
                 response.raise_for_status()
                 html_content = await response.text()
@@ -399,7 +415,7 @@ class YoushuSearchPlugin(Star):
                 message_text += f"状态: {novel_info.get('status', '无')}\n"
                 message_text += f"更新: {novel_info.get('update_time_str', '无')}\n"
                 synopsis = novel_info.get('synopsis', '无')
-                message_text += f"简介: {synopsis}\n"
+                message_text += f"简介: {synopsis[:200]}...\n"
                 message_text += f"链接: {novel_info.get('link', novel_url)}\n"
                 reviews = novel_info.get('reviews', [])
                 if reviews:
@@ -412,10 +428,26 @@ class YoushuSearchPlugin(Star):
                 
                 chain = []
                 if novel_info.get('image_url'):
-                    chain.append(Comp.Image.fromURL(novel_info['image_url']))
-                chain.append(Comp.Plain(message_text))
+                    image_url = novel_info['image_url']
+                    try:
+                        logger.info(f"正在尝试下载封面: {image_url}")
+                        timeout = aiohttp.ClientTimeout(total=10)
+                        async with session.get(image_url, timeout=timeout) as img_response:
+                            img_response.raise_for_status()
+                            image_bytes = await img_response.read()
+                        
+                        image_base64 = base64.b64encode(image_bytes).decode()
+                        image_component = Comp.Image(file=f"base64://{image_base64}")
+                        chain.append(image_component)
+
+                    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                        logger.warning(f"❌ 下载封面图片失败 (超时或链接无效): {e}")
+                        # 下载失败，仅在文本消息前添加提示
+                        message_text = "🖼️ 封面加载失败\n\n" + message_text
                 
+                chain.append(Comp.Plain(message_text))
                 yield event.chain_result(chain)
+                
             else:
                 yield event.plain_result(f"😢 无法从页面 {novel_id} 提取有效信息。")
 
@@ -425,7 +457,6 @@ class YoushuSearchPlugin(Star):
         except Exception as e:
             logger.error(f"解析书籍详情页失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 解析书籍详情页时发生错误。")
-
 
     @filter.command("ys") # 定义指令 /ys 书名 [序号 | -页码]
     async def youshu_search_command(self, event: AstrMessageEvent):
