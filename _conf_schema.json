@@ -1,0 +1,13 @@
+{
+  "base_url": {
+    "description": "选择访问地址",
+    "type": "string",
+    "default": "https://www.ypshuo.com/",
+    "options": ["https://youshu.me/", "https://www.ypshuo.com/"]
+  },
+  "cookie": {
+    "description": "youshu.me网址的Cookie（如cf_clearance=）",
+    "type": "string",
+    "default": ""
+  }
+}
