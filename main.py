@@ -585,6 +585,20 @@ class YoushuSearchPlugin(Star):
                     yield event.plain_result(f"❌ 您请求的第 {page_to_fetch} 页不存在，【{book_name}】的搜索结果最多只有 {max_pages} 页。")
                     return
 
+                if item_index is None and len(search_results) == 1 and max_pages == 1:
+                    logger.info(f"🔍 搜索到唯一结果 for '{book_name}', 直接显示详情。")
+                    selected_book = search_results[0]
+                    novel_id = selected_book.get('id')
+                    if not novel_id:
+                        yield event.plain_result("❌ 无法获取该书籍的ID。")
+                        return
+                    
+                    # 调用详情函数并返回
+                    async for result in self._get_and_format_novel_details(event, session, str(novel_id)):
+                        yield result
+                    return
+
+
                 if item_index is None:
                     start_num = (page_to_fetch - 1) * results_per_page + 1
                     message_text = f"以下是【{book_name}】的第 {page_to_fetch}/{max_pages} 页搜索结果:\n"
@@ -622,82 +636,6 @@ class YoushuSearchPlugin(Star):
         except Exception as e:
             logger.error(f"搜索书籍 '{book_name}' 失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 搜索书籍时发生未知错误: {str(e)}")
-
-    @filter.command("testys")
-    async def testys_command(self, event: AstrMessageEvent, novel_id: str = "1"):
-        """
-        测试用指令，根据指定ID解析小说信息。
-        用法: /testys [书目ID]
-        示例: /testys 45830
-        """
-        yield event.plain_result(f"🧪 正在测试解析书目ID: 【{novel_id}】，请稍候...")
-        if self.api == 1:
-            novel_url = f"https://www.ypshuo.com/novel/{novel_id}.html"
-        elif self.api == 2:
-            novel_url = f"https://youshu.me/book/{novel_id}"
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                try:
-                    logger.info(f"header: {self.headers}")
-                    async with session.get(novel_url, headers=self.headers, timeout=10) as response:
-                        response.raise_for_status()
-                        if self.api == 2:
-                            html_content = await response.text()
-                            logger.info(f"使用UTF-8编码解析新网址 (youshu.me) 的响应内容。")
-                        else:
-                            html_content = await response.text()
-                except aiohttp.ClientResponseError as e:
-                    yield event.plain_result(f"❌ 访问页面 {novel_url} 失败，HTTP状态码: {e.status}")
-                    return
-
-                novel_info = await self._get_novel_details_from_html(html_content, novel_id)
-
-                if not novel_info or not novel_info.get('novel_name'):
-                    yield event.plain_result(f"😢 无法从页面 {novel_id} 提取有效信息，请检查ID或重试。")
-                    return
-
-                # 格式化并返回信息
-                message_text = f"--- ✅ 【{novel_info.get('novel_name', '无')}】 (测试解析) ---\n"
-                message_text += f"作者: {novel_info.get('author_name', '无')}\n"
-                
-                word_number = novel_info.get('word_number')
-                if word_number is not None and isinstance(word_number, (int, float)):
-                    message_text += f"字数: {word_number / 10000:.2f}万字\n"
-                else:
-                    message_text += f"字数: 无\n"
-
-                score = novel_info.get('score', '无')
-                scorer = novel_info.get('scorer', '无')
-                message_text += f"评分: {score} ({scorer}人评分)\n"
-
-                message_text += f"状态: {novel_info.get('status', '无')}\n"
-                message_text += f"更新: {novel_info.get('update_time_str', '无')}\n"
-
-                synopsis = novel_info.get('synopsis', '无')
-                message_text += f"简介: {synopsis}\n"
-
-                message_text += f"链接: {novel_info.get('link', novel_url)}\n"
-
-                reviews = novel_info.get('reviews', [])
-                if reviews:
-                    message_text += "\n--- 📝 最新书评 ---\n"
-                    if self.api == 1:
-                        for i, review in enumerate(reviews):
-                            message_text += f"书评{i+1} ({review.get('rating', '无')}分): {review.get('content', '无')}\n"
-                    elif self.api == 2:
-                        for i, review in enumerate(reviews):
-                            message_text += f"{review.get('author', '无')} ({review.get('rating', '无')}分): {review.get('content', '无')}\n"
-                chain = []
-                if novel_info.get('image_url'):
-                    chain.append(Comp.Image.fromURL(novel_info['image_url']))
-                chain.append(Comp.Plain(message_text))
-
-                yield event.chain_result(chain)
-
-        except Exception as e:
-            logger.error(f"测试解析小说失败: {e}")
-            yield event.plain_result(f"❌ 测试解析时发生错误: {str(e)}")
 
     @filter.command("随机小说")
     async def youshu_random_command(self, event: AstrMessageEvent):
