@@ -1,7 +1,5 @@
 import asyncio
 import aiohttp
-import json
-import time
 import random
 import re
 import base64
@@ -50,33 +48,41 @@ class YoushuSearchPlugin(Star):
             "Cookie": self.COOKIE_STRING,
             "Referer": self.base_api_url
         }
+
+        self.YS_PLATFORMS = {"他站", "本站", "起点", "晋江", "番茄", "刺猬猫", "纵横", "飞卢", "17K", "有毒", "息壤", "铁血", "逐浪", "掌阅", "塔读", "独阅读", "少年梦", "SF", "豆瓣", "知乎", "公众号"}
+        self.YS_CATEGORIES = {"玄幻", "奇幻", "武侠", "仙侠", "都市", "现实", "军事", "历史", "悬疑", "游戏", "竞技", "科幻", "灵异", "二次元", "同人", "其他", "穿越时空", "架空历史", "总裁豪门", "都市言情", "仙侠奇缘", "幻想言情", "悬疑推理", "耽美纯爱", "衍生同人", "轻小说", "综合其他"}
+        self.YS_STATUSES = {"连载中", "已完结", "已太监"}
         
 
-    async def _perform_search(self, session: aiohttp.ClientSession, keyword: str, page: int = 1) -> Optional[List[Dict]]:
-        """直接调用后端搜索API并解析JSON结果"""
+    async def _perform_search(self, session: aiohttp.ClientSession, keyword: str, page: int = 1) -> Optional[tuple[List[Dict], int]]:
+        """
+        根据网站版本执行搜索。
+        成功时返回一个元组: (结果列表, 总页数)。
+        失败时返回 None。
+        """
         if self.api == 1:
             search_api_url = urljoin(self.base_api_url, self.search_api_endpoint)
             params = {"keyword": keyword, "page": str(page)}
-            
             try:
                 async with session.get(search_api_url, params=params, headers=self.headers, timeout=20) as response:
                     response.raise_for_status()
                     json_content = await response.json()
                     logger.info(f"搜索 '{keyword}' (Page {page}) API调用成功。")
-                    
                     if json_content.get("code") == "00" and "data" in json_content:
                         data = json_content["data"]
-                        results = data.get("data", [])
+                        # API返回的结果字典已经很丰富，直接使用
+                        results = data.get("data", []) 
                         total_pages = int(data.get("pageAll", 1))
                         return results, total_pages
                     else:
                         return None
             except Exception as e:
-                logger.error(f"❌ 执行网址API搜索时发生错误: {e}", exc_info=True)
+                logger.error(f"❌ 执行旧网址API搜索时发生错误: {e}", exc_info=True)
                 return None
 
         elif self.api == 2:
             try:
+                results_per_page = 20
                 encoded_keyword = quote(keyword)
                 search_url = urljoin(self.base_api_url, f"/search/all/{encoded_keyword}/{page}.html")
                 logger.info(f"正在访问搜索URL: {search_url}")
@@ -88,6 +94,7 @@ class YoushuSearchPlugin(Star):
                 def clean_html(raw_html):
                     return re.sub(r'<[^>]+>', '', raw_html).strip()
 
+                # 判断页面类型
                 if '共有<b class="hot">' in html_content:
                     logger.info("检测到搜索结果列表页，按列表解析。")
                     total_results = 0
@@ -95,16 +102,36 @@ class YoushuSearchPlugin(Star):
                     if total_match:
                         total_results = int(total_match.group(1))
                     
-                    results_per_page = 20
                     total_pages = (total_results + results_per_page - 1) // results_per_page if total_results > 0 else 1
                     
                     results = []
                     result_blocks = re.findall(r'<div class="c_row">.*?<div class="cb"></div>', html_content, re.DOTALL)
+                    
                     for block in result_blocks:
-                        match = re.search(r'<span class="c_subject"><a href="/book/(\d+)">(.*?)</a></span>', block, re.DOTALL)
-                        if match:
-                            book_id, novel_name_html = match.group(1), match.group(2)
-                            results.append({'id': int(book_id), 'novel_name': clean_html(novel_name_html)})
+                        book_info = {}
+                        # 提取书名和ID
+                        name_match = re.search(r'<span class="c_subject"><a href="/book/(\d+)">(.*?)</a></span>', block, re.DOTALL)
+                        if name_match:
+                            book_info['id'] = int(name_match.group(1))
+                            book_info['novel_name'] = clean_html(name_match.group(2))
+                        
+                        # 提取作者
+                        author_match = re.search(r'<span class="c_label">作者：</span><span class="c_value">(.*?)</span>', block, re.DOTALL)
+                        if author_match:
+                            book_info['author_name'] = clean_html(author_match.group(1))
+                        
+                        # 提取评分
+                        score_match = re.search(r'<span class="c_rr">([\d.]+)</span>', block)
+                        if score_match:
+                            book_info['score'] = score_match.group(1)
+                        
+                        # 提取评分人数
+                        scorer_match = re.search(r'<span class="stard">\((\d+)人评分\)</span>', block)
+                        if scorer_match:
+                            book_info['scorer'] = scorer_match.group(1)
+                        
+                        if 'id' in book_info and 'novel_name' in book_info:
+                            results.append(book_info)
                     
                     logger.info(f"成功从列表页解析到 {len(results)} 条结果，共 {total_pages} 页。")
                     return results, total_pages
@@ -130,7 +157,7 @@ class YoushuSearchPlugin(Star):
             except Exception as e:
                 logger.error(f"❌ 执行新网址搜索时发生未知错误: {e}", exc_info=True)
                 return None
-
+        
     async def _get_latest_novel_id(self, session: aiohttp.ClientSession) -> Optional[int]:
         """获取最新的小说ID"""
         if self.api == 1:
@@ -240,6 +267,17 @@ class YoushuSearchPlugin(Star):
                 author_match = re.search(r'作者：<span class="text-red-500".*?>(.*?)</span>', html_content)
                 novel_info['author_name'] = author_match.group(1).strip() if author_match else '无'
 
+                # 提取标签
+                novel_info['tags'] = []
+                tag_block_match = re.search(r'<div class="tag-list"[^>]*?>(.*?)</div>', html_content, re.DOTALL)
+                if tag_block_match:
+                    tag_html = tag_block_match.group(1)
+                    # 查找标签区块内的所有span标签内容
+                    tags_list = re.findall(r'<span[^>]*?>(.*?)</span>', tag_html)
+                    if tags_list:
+                        # 清理并存储找到的标签
+                        novel_info['tags'] = [tag.strip() for tag in tags_list if tag.strip()]
+
                 # 提取字数
                 word_count_match = re.search(r'字数：(.*?)万字', html_content)
                 if word_count_match:
@@ -327,18 +365,6 @@ class YoushuSearchPlugin(Star):
                 novel_info['score'] = clean_html_content(score_match.group(1)) if score_match else '无'
                 novel_info['scorer'] = clean_html_content(scorer_match.group(1)) if scorer_match else '无'
 
-                # 提取字数 (新网址，以字为单位)
-                word_count_match = re.search(r'已完结<i[^>]*?></i>(\d+)字</div>', html_content)
-                if word_count_match:
-                    # 字数以 '字' 为单位，直接存储整数
-                    novel_info['word_number'] = float(word_count_match.group(1).strip())
-                else:
-                    novel_info['word_number'] = None
-
-                # 提取状态
-                status_text = re.search(r'玄幻.*?<i[^>]*?></i>(.*?)<i[^>]*?></i>', html_content)
-                novel_info['status'] = clean_html_content(status_text.group(1)) if status_text else '无'
-
                 # 提取更新时间
                 update_time_match = re.search(r'最后更新：(.*?)</td>', html_content)
                 novel_info['update_time_str'] = clean_html_content(update_time_match.group(1)) if update_time_match else '无'
@@ -355,6 +381,37 @@ class YoushuSearchPlugin(Star):
                 img_match = re.search(r'<a[^>]*?class="book-detail-img"[^>]*?><img src="(.*?)"', html_content)
                 novel_info['image_url'] = urljoin(self.base_api_url, img_match.group(1).strip()) if img_match and img_match.group(1).strip() else None
                 
+                novel_info.update({'platform': '无', 'category': '无', 'status': '无', 'word_number': None})
+                info_exp_match = re.search(r'<div class="author-item-exp">(.*?)</div>', html_content, re.DOTALL)
+                if info_exp_match:
+                    # 1. 先用特殊字符替换分隔符
+                    raw_text = info_exp_match.group(1).replace('<i class="author-item-line"></i>', '|')
+                    # 2. 清理掉所有HTML标签
+                    clean_text = re.sub(r'<[^>]+>', '', raw_text)
+                    # 3. 按特殊字符分割
+                    info_parts = [part.strip() for part in clean_text.split('|') if part.strip()]
+                    
+                    # 4. 遍历提取出的每个部分，进行智能分类
+                    for part in info_parts:
+                        if part in self.YS_PLATFORMS:
+                            novel_info['platform'] = part
+                        elif part in self.YS_CATEGORIES:
+                            novel_info['category'] = part
+                        elif part in self.YS_STATUSES:
+                            novel_info['status'] = part
+                        elif '字' in part:
+                            word_match = re.search(r'(\d+)', part)
+                            if word_match:
+                                novel_info['word_number'] = float(word_match.group(1))
+
+                novel_info['tags'] = []
+                tag_section_match = re.search(r'<b>标签：</b>(.*?)</div>', html_content, re.DOTALL)
+                if tag_section_match:
+                    tag_block = tag_section_match.group(1)
+                    tags = re.findall(r'<a[^>]*?>(.*?)</a>', tag_block)
+                    if tags:
+                        novel_info['tags'] = [clean_html_content(tag) for tag in tags]
+
                 reviews = []
                 review_blocks = re.findall(r'<div class="c_row cf">.*?<div class="c_tag">', html_content, re.DOTALL)
 
@@ -400,9 +457,21 @@ class YoushuSearchPlugin(Star):
 
             novel_info = await self._get_novel_details_from_html(html_content, str(novel_id))
 
+            if not (novel_info and novel_info.get('novel_name', '无') != '无'):
+                raise ValueError(f"无法从页面 {novel_id} 提取有效信息。")
+
             if novel_info and novel_info.get('novel_name', '无') != '无':
                 message_text = f"---【{novel_info.get('novel_name', '无')}】---\n"
                 message_text += f"作者: {novel_info.get('author_name', '无')}\n"
+
+                if self.api == 2:
+                    message_text += f"平台: {novel_info.get('platform', '未知')}\n"
+                    message_text += f"分类: {novel_info.get('category', '未知')}\n"
+                
+                tags = novel_info.get('tags')
+                if tags:
+                    message_text += f"标签: {' '.join(tags)}\n"
+
                 word_number = novel_info.get('word_number')
                 if word_number is not None and isinstance(word_number, (int, float)):
                     message_text += f"字数: {word_number / 10000:.2f}万字\n"
@@ -415,7 +484,7 @@ class YoushuSearchPlugin(Star):
                 message_text += f"状态: {novel_info.get('status', '无')}\n"
                 message_text += f"更新: {novel_info.get('update_time_str', '无')}\n"
                 synopsis = novel_info.get('synopsis', '无')
-                message_text += f"简介: {synopsis[:200]}...\n"
+                message_text += f"简介: {synopsis}\n"
                 message_text += f"链接: {novel_info.get('link', novel_url)}\n"
                 reviews = novel_info.get('reviews', [])
                 if reviews:
@@ -453,10 +522,10 @@ class YoushuSearchPlugin(Star):
 
         except aiohttp.ClientResponseError as e:
             logger.error(f"❌ 访问详情页 {novel_url} 失败，HTTP状态码: {e.status}")
-            yield event.plain_result(f"❌ 访问书籍详情页失败。请尝试使用`/testys {novel_id}`。")
+            raise e
         except Exception as e:
             logger.error(f"解析书籍详情页失败: {e}", exc_info=True)
-            yield event.plain_result(f"❌ 解析书籍详情页时发生错误。")
+            raise e
 
     @filter.command("ys") # 定义指令 /ys 书名 [序号 | -页码]
     async def youshu_search_command(self, event: AstrMessageEvent):
@@ -495,7 +564,7 @@ class YoushuSearchPlugin(Star):
         
         try:
             async with aiohttp.ClientSession() as session:
-                results_per_page = 20
+                results_per_page = 20 if self.api == 2 else 15
 
                 page_to_fetch = page_to_list
                 if item_index is not None:
@@ -506,32 +575,33 @@ class YoushuSearchPlugin(Star):
 
                 search_info = await self._perform_search(session, book_name, page=page_to_fetch)
 
-                if search_info is None:
-                    yield event.plain_result(f"😢 未找到关于【{book_name}】的书籍信息或请求失败。")
+                if search_info is None or (search_info[1] == 0 and page_to_fetch == 1 and not search_info[0]):
+                    yield event.plain_result(f"😢 未找到关于【{book_name}】的任何书籍信息。")
                     return
 
                 search_results, max_pages = search_info
 
-                if page_to_fetch > max_pages:
+                if page_to_fetch > max_pages and max_pages > 0:
                     yield event.plain_result(f"❌ 您请求的第 {page_to_fetch} 页不存在，【{book_name}】的搜索结果最多只有 {max_pages} 页。")
                     return
-                
-                if not search_results and total_results == 0:
-                    yield event.plain_result(f"😢 未找到关于【{book_name}】的任何书籍信息。")
 
                 if item_index is None:
-                    # --- 列表模式 ---
                     start_num = (page_to_fetch - 1) * results_per_page + 1
                     message_text = f"以下是【{book_name}】的第 {page_to_fetch}/{max_pages} 页搜索结果:\n"
                     for i, book in enumerate(search_results):
-                        message_text += f"{start_num + i}. {book.get('novel_name', '未知书籍')}\n"
+                        num = start_num + i
+                        name = book.get('novel_name', '未知书籍')
+                        author = book.get('author_name', '未知作者')
+                        score = book.get('score', 'N/A')
+                        scorer = book.get('scorer', '0')
+                        message_text += f"{num}. {name}\n    作者：{author} | 评分: {score} ({scorer}人)\n"
+                    
                     message_text += f"\n💡 请使用 `/ys {book_name} <序号>` 查看详情"
                     if page_to_fetch < max_pages:
                         message_text += f"，或 `/ys {book_name} -{page_to_fetch + 1}` 翻页。"
                     yield event.plain_result(message_text)
 
                 else:
-                    # --- 详情模式 ---
                     index_on_page = (item_index - 1) % results_per_page
                     
                     if not (0 <= index_on_page < len(search_results)):
@@ -552,7 +622,6 @@ class YoushuSearchPlugin(Star):
         except Exception as e:
             logger.error(f"搜索书籍 '{book_name}' 失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 搜索书籍时发生未知错误: {str(e)}")
-
 
     @filter.command("testys")
     async def testys_command(self, event: AstrMessageEvent, novel_id: str = "1"):
@@ -636,11 +705,10 @@ class YoushuSearchPlugin(Star):
         随机获取一本优书网上的小说信息。
         用法: /随机小说
         """
-        max_retries = 5 # 最多重试5次
+        max_retries = 10
         
         async with aiohttp.ClientSession() as session:
             try:
-                # 步骤1: 获取最新的小说ID作为随机范围的上限
                 latest_id = await self._get_latest_novel_id(session)
                 if not latest_id:
                     yield event.plain_result("❌ 抱歉，未能获取到最新的小说ID，无法进行随机搜索。")
@@ -650,85 +718,33 @@ class YoushuSearchPlugin(Star):
                 yield event.plain_result("❌ 获取最新小说ID时出错，请稍后再试。")
                 return
 
-            # 步骤2: 循环尝试随机ID，直到成功或达到重试上限
             for attempt in range(max_retries):
+                random_id = random.randint(1, latest_id)
+                logger.info(f"第 {attempt + 1}/{max_retries} 次尝试随机ID: {random_id}")
+                
                 try:
-                    random_id = random.randint(1, latest_id)
+                    async for result in self._get_and_format_novel_details(event, session, str(random_id)):
+                        yield result
                     
-                    # 根据网站版本生成不同格式的URL
-                    if self.api == 1:
-                        novel_url = f"https://www.ypshuo.com/novel/{random_id}.html"
-                    else: # self.api == 2
-                        novel_url = f"https://youshu.me/book/{random_id}"
-                    
-                    logger.info(f"第 {attempt + 1}/{max_retries} 次尝试随机ID: {random_id} -> {novel_url}")
-
-                    # 步骤3: 访问随机页面
-                    try:
-                        async with session.get(novel_url, headers=self.headers, timeout=10) as response:
-                            response.raise_for_status()
-                            html_content = await response.text() # 无需指定编码，依赖请求头
-                    except aiohttp.ClientResponseError as e:
-                        if e.status == 404:
-                            logger.warning(f"页面 {novel_url} 不存在 (404)，正在重试...")
-                            continue # 页面不存在，直接进行下一次循环
-                        else:
-                            logger.error(f"访问 {novel_url} 时发生HTTP错误: {e.status}")
-                            yield event.plain_result(f"❌ 访问随机页面时出错: HTTP {e.status}")
-                            return
-
-                    # 步骤4: 解析页面内容
-                    novel_info = await self._get_novel_details_from_html(html_content, str(random_id))
-
-                    if not novel_info or novel_info.get('novel_name', '无') == '无':
-                        logger.warning(f"无法从页面 {random_id} 提取有效信息，正在重试...")
-                        continue
-
-                    # 步骤5: 格式化并发送成功信息
-                    message_text = f"---【{novel_info.get('novel_name', '无')}】---\n"
-                    message_text += f"作者: {novel_info.get('author_name', '无')}\n"
-                    
-                    word_number = novel_info.get('word_number')
-                    if word_number is not None and isinstance(word_number, (int, float)):
-                        message_text += f"字数: {word_number / 10000:.2f}万字\n"
-                    else:
-                        message_text += f"字数: 无\n"
-
-                    score = novel_info.get('score', '无')
-                    scorer = novel_info.get('scorer', '无')
-                    scorer_text = f"{scorer}人评分" if scorer and scorer != '无' else "无人评分"
-                    message_text += f"评分: {score} ({scorer_text})\n"
-
-                    message_text += f"状态: {novel_info.get('status', '无')}\n"
-                    message_text += f"更新: {novel_info.get('update_time_str', '无')}\n"
-
-                    synopsis = novel_info.get('synopsis', '无')
-                    message_text += f"简介: {synopsis}\n"
-
-                    message_text += f"链接: {novel_info.get('link', novel_url)}\n"
-
-                    reviews = novel_info.get('reviews', [])
-                    if reviews:
-                        message_text += "\n--- 📝 最新书评 ---\n"
-                        for review in reviews:
-                            author = review.get('author', '匿名')
-                            rating = review.get('rating', '无')
-                            content = review.get('content', '无')
-                            message_text += f"{author} ({rating}分): {content}\n"
-                    
-                    chain = []
-                    if novel_info.get('image_url'):
-                        chain.append(Comp.Image.fromURL(novel_info['image_url']))
-                    chain.append(Comp.Plain(message_text))
-
-                    yield event.chain_result(chain)
                     return
 
+                except aiohttp.ClientResponseError as e:
+                    if e.status == 404:
+                        logger.warning(f"页面 {random_id} 不存在 (404)，正在重试...")
+                        continue # 捕获到404错误，静默重试
+                    else:
+                        logger.error(f"访问随机页面时发生HTTP错误: {e.status}", exc_info=True)
+                        yield event.plain_result(f"❌ 访问随机页面时出错: HTTP {e.status}")
+                        return
+                except (ValueError, asyncio.TimeoutError) as e:
+                    # 捕获解析失败或超时，也静默重试
+                    logger.warning(f"处理随机ID {random_id} 失败: {e}，正在重试...")
+                    continue
                 except Exception as e:
                     logger.error(f"处理随机ID {random_id} 时发生未知错误: {e}", exc_info=True)
-                    # 单次尝试失败，循环会继续
+                    yield event.plain_result(f"❌ 处理随机书籍时发生未知错误。")
+                    return
 
-        # 如果循环5次都失败了，发送最终的失败消息
         yield event.plain_result("😢 抱歉，多次尝试后仍未找到有效的小说页面。请稍后再试。")
 
     async def terminate(self):
