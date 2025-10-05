@@ -575,7 +575,7 @@ class YoushuSearchPlugin(Star):
 
                 search_info = await self._perform_search(session, book_name, page=page_to_fetch)
 
-                if search_info is None or (search_info[1] == 0 and page_to_fetch == 1 and not search_info[0]):
+                if search_info is None or not search_info[0]:
                     yield event.plain_result(f"😢 未找到关于【{book_name}】的任何书籍信息。")
                     return
 
