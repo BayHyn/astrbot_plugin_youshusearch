@@ -14,7 +14,7 @@ from astrbot.api import logger
 @register(
     "astrbot_plugin_youshusearch",  # 插件ID
     "Foolllll",                    # 作者名
-    "小说搜索插件",                  # 插件显示名称
+    "优书搜索插件",                  # 插件显示名称
     "1.3",                         # 版本号
     "https://github.com/Foolllll-J/astrbot_plugin_youshusearch", # 插件仓库地址
 )
@@ -296,7 +296,7 @@ class YoushuSearchPlugin(Star):
                     else:
                         return None
             except Exception as e:
-                logger.error(f"❌ 执行旧网址API搜索时发生错误: {e}", exc_info=True)
+                logger.error(f"❌ 执行API搜索时发生错误: {e}", exc_info=True)
                 return None
 
         elif self.api == 2:
@@ -308,7 +308,9 @@ class YoushuSearchPlugin(Star):
 
                 async with session.get(search_url, headers=self.headers, timeout=20) as response:
                     response.raise_for_status()
-                    html_content = await response.text()
+                    body = await response.read()
+                    encoding = response.charset or 'utf-8'
+                    html_content = body.decode(encoding, errors='replace') 
                 
                 def clean_html(raw_html):
                     return re.sub(r'<[^>]+>', '', raw_html).strip()
@@ -369,7 +371,7 @@ class YoushuSearchPlugin(Star):
                     return [], 0
 
             except Exception as e:
-                logger.error(f"❌ 执行新网址搜索时发生未知错误: {e}", exc_info=True)
+                logger.error(f"❌ 执行搜索时发生错误: {e}", exc_info=True)
                 return None
         
     async def _get_latest_novel_id(self, session: aiohttp.ClientSession) -> Optional[int]:
